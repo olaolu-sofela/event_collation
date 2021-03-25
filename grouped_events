@@ -1,0 +1,259 @@
+# Databricks notebook source
+# DBTITLE 1,Session definition
+# MAGIC  %sql 
+# MAGIC DROP TABLE IF EXISTS userlibrary.ga_session_def;
+# MAGIC 
+# MAGIC 
+# MAGIC CREATE TABLE userlibrary.ga_session_def
+# MAGIC USING delta
+# MAGIC 
+# MAGIC (
+# MAGIC SELECT *,
+# MAGIC       CASE WHEN EXTRACT(month FROM hit_timestamp) - EXTRACT(month FROM last_event) >= (1)
+# MAGIC            OR EXTRACT(day FROM hit_timestamp) - EXTRACT(day FROM last_event) >= (1)
+# MAGIC             OR last_visit != visitid 
+# MAGIC              OR last_event IS NULL
+# MAGIC            THEN 1 ELSE 0 END AS is_new_session
+# MAGIC 
+# MAGIC       FROM (
+# MAGIC             SELECT *,
+# MAGIC                    LAG(hit_timestamp, 1) OVER
+# MAGIC                       (PARTITION BY customer_user ORDER BY hit_timestamp)
+# MAGIC                       AS last_event,
+# MAGIC                     LAG(visitid, 1) OVER
+# MAGIC                       (PARTITION BY customer_user ORDER BY  hit_timestamp, visitid)
+# MAGIC                       AS last_visit   
+# MAGIC                       
+# MAGIC               FROM commbi_prod.ml_googlebq 
+# MAGIC               WHERE YEAR(hit_timestamp)>2018
+# MAGIC            ) last
+# MAGIC   
+# MAGIC          
+# MAGIC )  
+
+# COMMAND ----------
+
+# MAGIC %sql refresh table userlibrary.ga_session_def
+
+# COMMAND ----------
+
+# MAGIC %sql 
+# MAGIC DROP TABLE IF EXISTS userlibrary.ga_plus_event;
+# MAGIC 
+# MAGIC CREATE TABLE userlibrary.ga_plus_event(
+# MAGIC SELECT *, 
+# MAGIC (CASE 
+# MAGIC --Tracking
+# MAGIC WHEN category LIKE "%Tracking%"  AND action LIKE "Successful%" THEN "Tracking: Search via Form" 
+# MAGIC WHEN category LIKE "%Tracking%" AND action = "Search-dashboard" THEN "Tracking: Search via Dashboard"
+# MAGIC WHEN category LIKE "%Tracking%" AND action = "Search-shipmentoverview" THEN "Tracking: Search via Overview"
+# MAGIC WHEN category LIKE "%Tracking%" AND action = "Show details" THEN "Tracking: Show details"
+# MAGIC WHEN category LIKE "%Tracking%" AND action = "Hide details" THEN "Tracking: Hide details"
+# MAGIC WHEN category LIKE "%Tracking%" AND action = "No results found" THEN "Tracking: No Results"
+# MAGIC WHEN category LIKE "%Tracking%" AND action like "%error%" THEN "Tracking: User error"
+# MAGIC WHEN category LIKE "%Tracking%" AND action = "Other errors" THEN "Tracking: Error Others"
+# MAGIC WHEN category LIKE "%Tracking%" AND action = "Print" THEN "Tracking: Print"
+# MAGIC 
+# MAGIC 
+# MAGIC --Quote
+# MAGIC WHEN (category = 'Quote' or  category = 'MML_Quote') AND action = 'Oversized Quote Request' THEN "Quote: Oversized Submit"
+# MAGIC WHEN (category = 'Quote' or  category = 'MML_Quote') AND  action = 'Inland Rate' THEN "Quote: Inland Rate Submit"
+# MAGIC WHEN (category = 'Quote' or  category = 'MML_Quote') AND  action = 'Quote Request' THEN "Quote: Quote Request"
+# MAGIC 
+# MAGIC 
+# MAGIC 
+# MAGIC --Booking
+# MAGIC WHEN category =  'IBooking' AND action = 'SubmitBooking' THEN "Booking: Instant Submit"
+# MAGIC WHEN category = 'IBooking' AND (action = 'BookingInfoData' or action = 'BookingServiceContract' or action = 'SetBookingProcessData' or action = 'BookingNAC') THEN "Booking: Instant Form Data Booking"
+# MAGIC WHEN category = 'IBooking' AND action = 'cargoInsuranceStatusData' THEN "Booking: Instant Form Data Cargo"
+# MAGIC WHEN category = 'IBooking' AND (action = 'SelectSailingRoutes' or action = 'SelectSailingData') THEN "Booking: Instant Form Data Sailing"
+# MAGIC WHEN category = 'IBooking' AND (action = 'SelectSailingRoutes' or action = 'RequiredDetailsData' or action = 'OptionalDetailsData') THEN "Booking: Instant Form Data Details"
+# MAGIC WHEN category like '%Analysis%' and  action = 'Abandon Booking' THEN "Booking: Instant Abandon (legacy)"
+# MAGIC WHEN (category = 'Booking' or category = 'MML_Booking') and action = 'submit' THEN "Booking: Classic Submit"
+# MAGIC WHEN (category = 'Booking' or category = 'MML_Booking') and action like '%duplicate%' THEN "Booking: Classic Duplicate"
+# MAGIC WHEN (category = 'Booking' or category = 'MML_Booking') and action like '%amend%' THEN "Booking: Classic Amend"
+# MAGIC WHEN (category = 'Booking' or category = 'MML_Booking' ) and (action = 'cancel') THEN "Booking: Classic Cancel"
+# MAGIC WHEN (category = 'Booking' or category = 'MML_Booking' or category = 'MML_Analysis') and (action != 'cancel' or action not like '%amend%' or action not like '%duplicate%' or action not like 'submit') THEN "Booking: Classic Other"
+# MAGIC 
+# MAGIC --Booking: Spot
+# MAGIC WHEN category = 'Spot Offer' AND action = 'SpotProductSubmit' THEN "Booking: Spot Submit (legacy)"
+# MAGIC WHEN category = 'Spot Offer' AND action = 'SelectSpotProduct' THEN "Booking: Spot Select (legacy)"
+# MAGIC 
+# MAGIC --Instant price
+# MAGIC WHEN category = 'Instant Price' AND action = 'CombinedPricingSearch' THEN "Instant Price: Search"
+# MAGIC WHEN category = 'Instant Price' AND action = 'CombinedPricingQuote' THEN "Instant Price: Quote"
+# MAGIC WHEN category = 'Instant Price' AND action = 'CombinedPricingResults' THEN "Instant Price: Result"
+# MAGIC 
+# MAGIC --Quote
+# MAGIC WHEN category like '%Quote%' AND action = 'Quote Request' THEN "Quote: Standard Quote Submit"
+# MAGIC WHEN category like '%Quote%' AND action = 'Oversized Quote Request' THEN "Quote: Oversized Quote Submit"
+# MAGIC 
+# MAGIC --Inland
+# MAGIC WHEN category like '%Quote%' AND (action = 'Inland Rate' or action = 'Rate Lookup' )THEN "Inland Rate: Lookup"
+# MAGIC WHEN category like '%Rate%' AND (action like '%Lookup%' ) THEN "Inland Rate: Lookup (via booking)"
+# MAGIC 
+# MAGIC 
+# MAGIC ---Shippment 
+# MAGIC WHEN (category = 'ShippingInstructions' or category = 'MML_ShippingInstructions') AND action like '%submit%' THEN "Shipping Instructions: Submit"
+# MAGIC WHEN (category = 'ShippingInstructions' or category = 'MML_ShippingInstructions') AND action like '%print%' THEN "Shipping Instructions: Print"
+# MAGIC WHEN (category = 'ShippingInstructions' or category = 'MML_ShippingInstructions') AND action like '%duplicate%' THEN "Shipping Instructions: Duplicate"
+# MAGIC WHEN (category = 'ShippingInstructions' or category = 'MML_ShippingInstructions') AND action like '%amend%' THEN "Shipping Instructions: Amend"
+# MAGIC WHEN (category = 'ShippingInstructions' or category = 'MML_ShippingInstructions') AND action like '%download%' THEN "Shipping Instructions: Download"
+# MAGIC WHEN (category = 'ShippingInstructions' or category = 'MML_ShippingInstructions') AND action like '%newParty%' THEN "Shipping Instructions: New Party"
+# MAGIC WHEN (category = 'ShippingInstructions' or category = 'MML_ShippingInstructions') AND (action not like '%newParty%' or action not like '%download%' or action not like '%amend%' or action not like '%duplicate%' or action not like '%print%' or action not like '%submit%') THEN "Shipping Instructions: Other"
+# MAGIC 
+# MAGIC --Cargo Insurance
+# MAGIC WHEN (category = 'Cargo Insurance') AND action like '%Request%' THEN "Cargo Insurance: Request"
+# MAGIC WHEN (category like '%MCI%' or category = 'MCL_MCI') AND action like '%NOTAVAILABLE%' THEN "Cargo Insurance: Not Available"
+# MAGIC WHEN (category like '%MCI%' or category = 'MCL_MCI') AND (action = 'NONPAYGREJ' or action = 'NONPAYGBOOK' or action like '%nonpay%') THEN "Cargo Insurance: Non-Paid"
+# MAGIC WHEN (category like '%MCI%' or category = 'MCL_MCI' or category = 'UX_CI') AND (action = 'PAYGBOOK'  or action like '%pay%') THEN "Cargo Insurance: Paid"
+# MAGIC WHEN (category like '%MCI%' or category = 'MCL_MCI' or category = 'UX_CI') AND ( action like '%CIUnavailableForUserCountry%') THEN "Cargo Insurance: Unavailable for Country"
+# MAGIC WHEN (category like '%MCI%' or category = 'MCL_MCI' or category = 'UX_CI') AND ( action not like '%CIUnavailableForUserCountry%' or action != 'PAYGBOOK'  or action not like '%pay%' or action != 'NONPAYGREJ' or action != 'NONPAYGBOOK' or action not like '%nonpay%' or action not like '%NOTAVAILABLE%') THEN "Cargo Insurance: Other Events"
+# MAGIC 
+# MAGIC --VGM
+# MAGIC WHEN (category like '%VGM%' or category = 'MML_VGM') AND ( action like '%submit%') THEN "VGM (Verified Gross Mass): Submit"
+# MAGIC WHEN (category like '%VGM%' or category = 'MML_VGM') AND ( action not like '%submit%') THEN "VGM (Verified Gross Mass): Other"
+# MAGIC 
+# MAGIC 
+# MAGIC -- New user register
+# MAGIC WHEN (category = 'MML_Register' or category like '%Register%') AND action = 'New User Registered' THEN "User Registration: New User"
+# MAGIC WHEN category like '%Register%' AND action = 'User Upgrade' THEN "User Registration: Upgrade User"
+# MAGIC WHEN (category like '%Registration%' or category = 'MML_Registration') AND action = 'Registration Submit' THEN "User Registration: New User (legacy)"
+# MAGIC 
+# MAGIC 
+# MAGIC -- Login type
+# MAGIC WHEN (category like '%Login%') AND (action = 'Internal User Login with Azure') THEN "Login: Internal (Azure)"
+# MAGIC WHEN (category like '%Login%') AND (action like '%Internal User Login') THEN "Login: Internal (Other)"
+# MAGIC WHEN (category like '%Login%') AND (action like '%Submit%') THEN "Login: External Submit"
+# MAGIC 
+# MAGIC 
+# MAGIC -- HELP and FAQ
+# MAGIC WHEN category like '%Help%' AND (action = 'View Case' or action = 'Search Case') THEN "Support: Search/View case"
+# MAGIC WHEN category like '%Help%' AND action = 'Create Case' THEN "Support: Create Case"
+# MAGIC WHEN category like '%Help%' AND (action = 'Case Comment' or action = 'Withdraw Case' or action = 'Reopen Case') THEN "Support: Case Other"
+# MAGIC WHEN category like '%Help%' AND action = 'View FAQ' THEN "Support: FAQ"
+# MAGIC WHEN category like '%Help%' AND (action = 'Technical Chat' or action = 'Business Chat') THEN "Support: Chat"
+# MAGIC WHEN category like '%Help%' AND (action = 'Share' or action = 'Suggestion') THEN "Support: Share/Suggestion"
+# MAGIC 
+# MAGIC 
+# MAGIC --CSOP
+# MAGIC WHEN category like '%CSOP%' AND action = 'Request changed' or action like '%changed%' THEN "Customer Service Operating Procedure (CSOP): Change"
+# MAGIC WHEN category like '%CSOP%' AND action = 'Create' THEN "Customer Service Operating Procedure (CSOP): Create"
+# MAGIC WHEN category like '%CSOP%' AND action = 'Download' THEN "Customer Service Operating Procedure (CSOP): Download"
+# MAGIC WHEN category like '%CSOP%' AND action = 'Extend' THEN "Customer Service Operating Procedure (CSOP): Extend"
+# MAGIC WHEN category like '%CSOP%' AND (action != 'Extend' or action != 'Download' or action != 'Create' or action not like '%changed%') THEN "Customer Service Operating Procedure (CSOP): Other Events"
+# MAGIC 
+# MAGIC 
+# MAGIC --Download
+# MAGIC WHEN (category = 'MML_Document' or category = 'Document') AND action like '%download%' THEN "Downloads: Shipment Docs Success"
+# MAGIC WHEN (category = 'MML_Document' or category = 'Document') AND (action = 'document-not-found' or action = 'downloadFailed' or action = 'documentNotReady') THEN "Downloads: Shipment Docs Failed/Not Found"
+# MAGIC 
+# MAGIC 
+# MAGIC --Error
+# MAGIC WHEN (category = 'MML_500 server error with log ID' or category = '500 server error with log ID') AND (action not like '%download%' or action != 'document-not-found' or action != 'downloadFailed' or action != 'documentNotReady') THEN "Error: 500"
+# MAGIC WHEN (category = 'MML_404 not found' or category = '404 not found') AND (action not like '%download%' or action != 'document-not-found' or action != 'downloadFailed' or action != 'documentNotReady') THEN "Error: 400"
+# MAGIC WHEN category like '%Error%' AND (action not like '%download%' or action != 'document-not-found' or action != 'downloadFailed' or action != 'documentNotReady') THEN "Error: Other Events"
+# MAGIC 
+# MAGIC 
+# MAGIC --UX Shipment Management
+# MAGIC WHEN category = 'UX_ShipmentMngt' AND (action = 'View DD details') THEN "Shipment Management: Demmurage & Detention Details"
+# MAGIC WHEN category = 'UX_ShipmentMngt' AND (action = 'Empty Return Date') THEN "Shipment Management: Empty Return Date"
+# MAGIC WHEN category = 'UX_ShipmentMngt' AND (action = 'Pick up date') THEN "Shipment Management: Pick-up Date"
+# MAGIC WHEN category = 'UX_ShipmentMngt' AND (action = 'Ct Tracking') THEN "Shipment Management: Container Tracking"
+# MAGIC WHEN category = 'UX_ShipmentMngt' AND (action = 'LFD revised') THEN "Shipment Management: LFD Change"
+# MAGIC WHEN category = 'UX_ShipmentMngt' AND (action = 'ETA Change') THEN "Shipment Management: ETA Change"
+# MAGIC WHEN category = 'UX_ShipmentMngt' AND (action != 'ETA Change' or action != 'LFD revised' or action != 'Ct Tracking' or action != 'Pick up date' or action != 'Empty Return Date' or action != 'View DD details') THEN "Shipment Management: Other UX Events"
+# MAGIC 
+# MAGIC 
+# MAGIC --Service Contract Essentials
+# MAGIC WHEN (category = 'MML_ServiceContractEssentials' or category = 'ServiceContractEssentials') AND (action like '%form%') THEN "Service Contract: Form"
+# MAGIC WHEN (category = 'MML_ServiceContractEssentials' or category = 'ServiceContractEssentials') AND (action like '%result%') THEN "Service Contract: Result"
+# MAGIC 
+# MAGIC 
+# MAGIC --Navigation
+# MAGIC WHEN (category = 'Navigation' or category = 'IGN')  THEN "Navigation: All Events"
+# MAGIC 
+# MAGIC 
+# MAGIC --PDF download
+# MAGIC WHEN (category = 'PDF Downloads') AND (action like '%maersk%') THEN "Content Events: Downloads Report Docs Maersk"
+# MAGIC WHEN (category like '%Form%') AND (action like '%Submit%' or action like '%contact%') THEN "Content Events: Forms Contact Submit"
+# MAGIC WHEN (category like '%Form%') AND (action like '%Submit%' or action like '%newsletter%') THEN "Content Events: Forms Newsletter Submit"
+# MAGIC 
+# MAGIC 
+# MAGIC --Campaign (Content Events)
+# MAGIC WHEN (category like '%Link%') AND (action like '%Submit%' or action like '%www.maersk.com.cn%') THEN "Content Events: Links All .cn Pages"
+# MAGIC WHEN (category like '%Link%') AND (action like '%Submit%' or action like '%www.maersk.com%') THEN "Content Events: Links All .com Pages"
+# MAGIC 
+# MAGIC WHEN (category like '%Frontpage%') and action = '%CTA%' THEN "Content Events: CTA Frontpage"
+# MAGIC WHEN (category = 'Call to Actions') and (action like '%chat%'  or action like '%contactus%' or action like '%help%' or action like '%cm%' or action like '%liveChat%') THEN "Content Events: CTA Contact"
+# MAGIC WHEN (category = 'Call to Actions') and (action like '%youtube%'  or action like '%watch%') THEN "Content Events: Video Plays"
+# MAGIC WHEN (category = 'Video Play')  THEN "Content Events: Video Plays"
+# MAGIC WHEN (category = 'Call to Actions' or category like '%Form%' or category like '%Campaign%')  THEN "Content Events: Other Events"
+# MAGIC 
+# MAGIC --Customs House Broker
+# MAGIC WHEN (category = 'UX_VAS_ECC') and action = 'Offer'  THEN "Customs House Broker (CHB): Offer Shown (Export Customs Clearance)"
+# MAGIC WHEN (category = 'UX_VAS_ECC') and action like '%confirmed%'  THEN "Customs House Broker (CHB): Offer Bought (Export Customs Clearance)"
+# MAGIC WHEN (category = 'UX_VAS_ECC') and action like '%confirmed%'  THEN "Customs House Broker (CHB): Other Events (Export Customs Clearance)"
+# MAGIC WHEN (category = 'UX_VAS_ICC') and action like '%Offer%'  THEN "Customs House Broker (CHB): Offer Shown (Import Customs Clearance"
+# MAGIC WHEN (category = 'UX_VAS_ICC') and action like '%confirmed%'  THEN "Customs House Broker (CHB): Offer Bought (Import Customs Clearance)"
+# MAGIC 
+# MAGIC -- Self-Service Platform 
+# MAGIC WHEN (category = 'UX from SSP') THEN "Self-Service Platform (SSP): All UX Events"
+# MAGIC WHEN (category = 'UX_VAS_IDO') and (action not like '%Confirmation%')  THEN "Self Sevice Delivery Order (SSDO): Confirmation (Import Delivery Order)"
+# MAGIC WHEN (category = 'UX_VAS_IDO') and (action not like '%Review%')  THEN "Self Sevice Delivery Order (SSDO): Review (Import Delivery Order)"
+# MAGIC WHEN (category = 'UX_VAS_IDO') and (action not like '%Delivery%' or action not like '%Relese%')  THEN "Self Sevice Delivery Order (SSDO): Details (Import Delivery Order)"
+# MAGIC 
+# MAGIC --MyFinance
+# MAGIC WHEN (category = 'UX_MyFinance') and (action like '%Download%')  THEN "MyFinance: Download"
+# MAGIC WHEN (category = 'UX_MyFinance') and (action like '%options%')  THEN "MyFinance: Search Free" --Check this line and next line.
+# MAGIC WHEN (category = 'UX_MyFinance') and (action like '%Search by%')  THEN "MyFinance: Search Menu"
+# MAGIC WHEN (category = 'UX_MyFinance') and (action like '%Filter%')  THEN "MyFinance: Filter"
+# MAGIC WHEN (category = 'UX_MyFinance') and (action like '%Sort%')  THEN "MyFinance: Sort"
+# MAGIC WHEN (category = 'UX_MyFinance') and (action like '%Export%')  THEN "MyFinance: Export"
+# MAGIC WHEN (category = 'UX_MyFinance') and (action like '%View%')  THEN "MyFinance: View"
+# MAGIC WHEN (category = 'UX_MyFinance') and (action like '%onMouseOver%')  THEN "MyFinance: Mouseover"
+# MAGIC WHEN (category = 'UX_MyFinance') and (action not like '%onMouseOver%' or action not like '%View%' or action not like '%Export%' or action not like '%Sort%' or action not like '%Filter%' or action not like '%Search by%' or action not like '%Search by%' or action not like '%options%' or action not like '%Download%')  THEN "MyFinance: Other UX Events"
+# MAGIC 
+# MAGIC --HP Banners
+# MAGIC WHEN (category = 'HP Banners')  THEN "Banners (HP): All UX Events"
+# MAGIC 
+# MAGIC --Scroll Action
+# MAGIC WHEN (category = 'Scroll depth') and (action like '%50%')  THEN "Scroll Depth: 50%"
+# MAGIC WHEN (category = 'Scroll depth') and (action like '%75%')  THEN "Scroll Depth: 75%"
+# MAGIC WHEN (category = 'Scroll depth') and (action like '%50%' or action not like '%75%')  THEN "Scroll Depth: Other UX Events"
+# MAGIC 
+# MAGIC --Personalisation
+# MAGIC WHEN (category = 'Personalisation Testing')  THEN "Testing: Personalisation"
+# MAGIC WHEN (category = 'Decision Tree - New')  THEN "Testing: Decision Tree"
+# MAGIC WHEN (category = 'AGH Testing')  THEN "Experimentation (AGH): All UX Events"
+# MAGIC 
+# MAGIC --User Management
+# MAGIC WHEN (category = 'MML_Portal User Management' or category = 'Portal User Management') and (action like '%password%')  THEN "User Management: Password (legacy)"
+# MAGIC WHEN (category = 'MML_Portal User Management' or category = 'Portal User Management') and (action not like '%password%')  THEN "User Management: Other Events (legacy)"
+# MAGIC 
+# MAGIC -- WHEN (category = 'Booking' or category = 'MML_Booking') and (action = 'amendStructured' or action = "amendFreeText") THEN "Booking: Amend Structure"
+# MAGIC -- WHEN category = 'IBooking' AND  action = 'SetBookingProcessData' THEN "Booking: Spot Submit"
+# MAGIC -- WHEN category = 'IBooking' AND  action = 'OptionalDetailsData' THEN "Booking: Review-booking"
+# MAGIC 
+# MAGIC 
+# MAGIC 
+# MAGIC 
+# MAGIC ELSE "Other event"
+# MAGIC END)  AS event_Group
+# MAGIC 
+# MAGIC 
+# MAGIC FROM ga_session_def
+# MAGIC 
+# MAGIC 
+# MAGIC -- WHERE customer_user != "100" and customer_user != "10000007951" and YEAR(hit_timestamp) = "2020"  and (keyword LIKE "mae%" or keyword LIKE "mea%" or keyword LIKE "mar%" or keyword LIKE "mer%" or keyword LIKE "mes%") and action is not null and category is not null
+# MAGIC )
+
+# COMMAND ----------
+
+# DBTITLE 1,Delete folder from DBFS
+# MAGIC %fs rm -r dbfs:/user/hive/warehouse/userlibrary.db/ga_events
+
+# COMMAND ----------
+
+# MAGIC %sql 
+# MAGIC select * from  userlibrary.ga_plus_event
